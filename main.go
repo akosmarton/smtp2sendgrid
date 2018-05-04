@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"io"
 	"io/ioutil"
 	"log"
@@ -12,8 +13,10 @@ import (
 	"net/mail"
 	"os"
 	"strings"
+	"unicode"
 
 	"github.com/emersion/go-smtp"
+	"github.com/google/uuid"
 	sendgrid "github.com/sendgrid/sendgrid-go"
 	sgmail "github.com/sendgrid/sendgrid-go/helpers/mail"
 )
@@ -30,8 +33,63 @@ func (bkd *Backend) AnonymousLogin() (smtp.User, error) {
 
 type User struct{}
 
+func Add(m *sgmail.SGMailV3, contentType string, r io.Reader) error {
+	mediaType, params, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		return err
+	}
+
+	fmt.Println(contentType)
+
+	if strings.HasPrefix(mediaType, "multipart/") {
+		mr := multipart.NewReader(r, params["boundary"])
+		for {
+			p, err := mr.NextPart()
+			if err == io.EOF {
+				break
+			} else if err != nil {
+				return err
+			}
+			if err := Add(m, p.Header.Get("Content-Type"), p); err != nil {
+				return err
+			}
+		}
+	} else if strings.HasPrefix(mediaType, "text/") {
+		b, err := ioutil.ReadAll(r)
+		if err != nil {
+			return err
+		}
+		m.AddContent(sgmail.NewContent(mediaType, string(b)))
+	} else {
+		a := sgmail.NewAttachment()
+		a.SetType(mediaType)
+		if params["name"] == "" {
+			a.SetFilename(uuid.New().String())
+		} else {
+			a.SetFilename(params["name"])
+		}
+
+		bi := bytes.Buffer{}
+		if _, err := bi.ReadFrom(r); err != nil {
+			return err
+		}
+
+		if _, err := base64.StdEncoding.DecodeString(bi.String()); err == nil {
+			a.SetContent(stripSpaces(bi.String()))
+		} else {
+			a.SetContent(base64.StdEncoding.EncodeToString(bi.Bytes()))
+		}
+		m.AddAttachment(a)
+	}
+
+	return nil
+}
+
 func (u *User) Send(_ string, _ []string, r io.Reader) error {
 	mi, err := mail.ReadMessage(r)
+	if err != nil {
+		return err
+	}
 
 	mo := new(sgmail.SGMailV3)
 
@@ -61,61 +119,10 @@ func (u *User) Send(_ string, _ []string, r io.Reader) error {
 	mo.Subject = mi.Header.Get("Subject")
 	mo.SetHeader("Date", mi.Header.Get("Date"))
 
-	mediaType, params, err := mime.ParseMediaType(mi.Header.Get("Content-Type"))
-	if err != nil {
-		log.Println(err)
-		return err
-	}
-
 	mo.AddPersonalizations(p)
 
-	if strings.HasPrefix(mediaType, "multipart/") {
-		mr := multipart.NewReader(mi.Body, params["boundary"])
-		for {
-			p, err := mr.NextPart()
-			if err == io.EOF {
-				break
-			}
-			if err != nil {
-				return err
-			}
-			mediaType, _, err := mime.ParseMediaType(p.Header.Get("Content-Type"))
-			if err != nil {
-				log.Println(err)
-				return err
-			}
-			if strings.HasPrefix(mediaType, "multipart/") {
-				slurp, err := ioutil.ReadAll(p)
-				if err != nil {
-					return err
-				}
-				mo.AddContent(sgmail.NewContent(mediaType, string(slurp)))
-			} else if strings.HasPrefix(mediaType, "text/") {
-				slurp, err := ioutil.ReadAll(p)
-				if err != nil {
-					return err
-				}
-				mo.AddContent(sgmail.NewContent(mediaType, string(slurp)))
-			} else {
-				b := bytes.Buffer{}
-				_, err := b.ReadFrom(base64.NewDecoder(base64.StdEncoding, p))
-				if err != nil {
-					return err
-				}
-				s := base64.StdEncoding.EncodeToString(b.Bytes())
-				a := sgmail.NewAttachment()
-				a.SetContent(s)
-				a.SetType(mediaType)
-				a.SetFilename(p.FileName())
-				mo.AddAttachment(a)
-			}
-		}
-	} else {
-		body, err := ioutil.ReadAll(mi.Body)
-		if err != nil {
-			return err
-		}
-		mo.AddContent(sgmail.NewContent(mediaType, string(body)))
+	if err := Add(mo, mi.Header.Get("Content-Type"), mi.Body); err != nil {
+		return err
 	}
 
 	response, err := client.Send(mo)
@@ -158,4 +165,15 @@ func main() {
 	if err := s.ListenAndServe(); err != nil {
 		log.Fatal(err)
 	}
+}
+
+func stripSpaces(str string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsSpace(r) {
+			// if the character is a space, drop it
+			return -1
+		}
+		// else keep it in the string
+		return r
+	}, str)
 }
