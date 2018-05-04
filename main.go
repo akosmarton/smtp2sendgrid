@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/base64"
 	"errors"
-	"fmt"
 	"io"
 	"io/ioutil"
 	"log"
@@ -38,8 +37,6 @@ func Add(m *sgmail.SGMailV3, contentType string, r io.Reader) error {
 	if err != nil {
 		return err
 	}
-
-	fmt.Println(contentType)
 
 	if strings.HasPrefix(mediaType, "multipart/") {
 		mr := multipart.NewReader(r, params["boundary"])
