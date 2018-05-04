@@ -10,6 +10,7 @@ import (
 	"mime"
 	"mime/multipart"
 	"net/mail"
+	"net/textproto"
 	"os"
 	"strings"
 	"unicode"
@@ -32,8 +33,8 @@ func (bkd *Backend) AnonymousLogin() (smtp.User, error) {
 
 type User struct{}
 
-func Add(m *sgmail.SGMailV3, contentType string, r io.Reader) error {
-	mediaType, params, err := mime.ParseMediaType(contentType)
+func Add(m *sgmail.SGMailV3, h textproto.MIMEHeader, r io.Reader) error {
+	mediaType, params, err := mime.ParseMediaType(h.Get("Content-Type"))
 	if err != nil {
 		return err
 	}
@@ -47,7 +48,7 @@ func Add(m *sgmail.SGMailV3, contentType string, r io.Reader) error {
 			} else if err != nil {
 				return err
 			}
-			if err := Add(m, p.Header.Get("Content-Type"), p); err != nil {
+			if err := Add(m, p.Header, p); err != nil {
 				return err
 			}
 		}
@@ -60,10 +61,19 @@ func Add(m *sgmail.SGMailV3, contentType string, r io.Reader) error {
 	} else {
 		a := sgmail.NewAttachment()
 		a.SetType(mediaType)
-		if params["name"] == "" {
-			a.SetFilename(uuid.New().String())
-		} else {
+		if params["name"] != "" {
 			a.SetFilename(params["name"])
+		} else {
+			a.SetFilename(uuid.New().String())
+		}
+		cid := h.Get("Content-Id")
+		if cid != "" {
+			cid = strings.TrimPrefix(cid, "<")
+			cid = strings.TrimSuffix(cid, ">")
+			a.SetContentID(cid)
+			if strings.HasPrefix(h.Get("Content-Disposition"), "inline;") {
+				a.SetDisposition("inline")
+			}
 		}
 
 		bi := bytes.Buffer{}
@@ -71,7 +81,7 @@ func Add(m *sgmail.SGMailV3, contentType string, r io.Reader) error {
 			return err
 		}
 
-		if _, err := base64.StdEncoding.DecodeString(bi.String()); err == nil {
+		if h.Get("Content-Transfer-Encoding") == "base64" {
 			a.SetContent(stripSpaces(bi.String()))
 		} else {
 			a.SetContent(base64.StdEncoding.EncodeToString(bi.Bytes()))
@@ -118,7 +128,11 @@ func (u *User) Send(_ string, _ []string, r io.Reader) error {
 
 	mo.AddPersonalizations(p)
 
-	if err := Add(mo, mi.Header.Get("Content-Type"), mi.Body); err != nil {
+	h := make(textproto.MIMEHeader)
+
+	h.Set("Content-Type", mi.Header.Get("Content-Type"))
+
+	if err := Add(mo, h, mi.Body); err != nil {
 		return err
 	}
 
