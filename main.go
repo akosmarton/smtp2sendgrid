@@ -143,7 +143,7 @@ func (u *User) Send(_ string, _ []string, r io.Reader) error {
 		return err
 	} else {
 		if response.StatusCode < 300 {
-			log.Info().Str("to", to[0].String()).Int("statusCode", response.StatusCode).Msg("Message sent successfull")
+			log.Info().Str("to", to[0].String()).Int("statusCode", response.StatusCode).Msg("Message sent successfully")
 		} else {
 			log.Error().Str("to", to[0].String()).Int("statusCode", response.StatusCode).Msg("Message failed to send")
 			return errors.New(response.Body)
