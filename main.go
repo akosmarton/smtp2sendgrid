@@ -6,7 +6,6 @@ import (
 	"errors"
 	"io"
 	"io/ioutil"
-	"log"
 	"mime"
 	"mime/multipart"
 	"net/mail"
@@ -17,6 +16,8 @@ import (
 
 	"github.com/emersion/go-smtp"
 	"github.com/google/uuid"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	sendgrid "github.com/sendgrid/sendgrid-go"
 	sgmail "github.com/sendgrid/sendgrid-go/helpers/mail"
 )
@@ -138,13 +139,13 @@ func (u *User) Send(_ string, _ []string, r io.Reader) error {
 
 	response, err := client.Send(mo)
 	if err != nil {
-		log.Println(err)
+		log.Error().Msg(err.Error())
 		return err
 	} else {
 		if response.StatusCode < 300 {
-			log.Println("Message sent successfully to", to, response.StatusCode)
+			log.Info().Str("to", to[0].String()).Int("statusCode", response.StatusCode).Msg("Message sent successfull")
 		} else {
-			log.Println("Message failed to send to", to, response.StatusCode)
+			log.Error().Str("to", to[0].String()).Int("statusCode", response.StatusCode).Msg("Message failed to send")
 			return errors.New(response.Body)
 		}
 	}
@@ -159,6 +160,8 @@ func (u *User) Logout() error {
 var client *sendgrid.Client
 
 func main() {
+	log.Logger = log.Hook(SeverityHook{})
+
 	be := &Backend{}
 
 	client = sendgrid.NewSendClient(os.Getenv("SENDGRID_API_KEY"))
@@ -172,9 +175,9 @@ func main() {
 	s.MaxRecipients = 50
 	s.AuthDisabled = true
 
-	log.Println("Starting server at", s.Addr)
+	log.Info().Str("addr", s.Addr).Msg("Starting server")
 	if err := s.ListenAndServe(); err != nil {
-		log.Fatal(err)
+		log.Fatal().Msg(err.Error())
 	}
 }
 
@@ -187,4 +190,12 @@ func stripSpaces(str string) string {
 		// else keep it in the string
 		return r
 	}, str)
+}
+
+type SeverityHook struct{}
+
+func (h SeverityHook) Run(e *zerolog.Event, level zerolog.Level, msg string) {
+	if level != zerolog.NoLevel {
+		e.Str("severity", level.String())
+	}
 }
