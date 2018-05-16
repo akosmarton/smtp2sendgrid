@@ -16,10 +16,11 @@ import (
 
 	"github.com/emersion/go-smtp"
 	"github.com/google/uuid"
-	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
 	sendgrid "github.com/sendgrid/sendgrid-go"
 	sgmail "github.com/sendgrid/sendgrid-go/helpers/mail"
+	"github.com/tommy351/zap-stackdriver"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 type Backend struct{}
@@ -139,13 +140,13 @@ func (u *User) Send(_ string, _ []string, r io.Reader) error {
 
 	response, err := client.Send(mo)
 	if err != nil {
-		log.Error().Msg(err.Error())
+		log.Error(err.Error())
 		return err
 	} else {
 		if response.StatusCode < 300 {
-			log.Info().Str("to", to[0].String()).Int("statusCode", response.StatusCode).Msg("Message sent successfully")
+			log.Info("Message sent successfully", zap.String("to", to[0].String()), zap.Reflect("response", response))
 		} else {
-			log.Error().Str("to", to[0].String()).Int("statusCode", response.StatusCode).Msg("Message failed to send")
+			log.Error("Message failed to send", zap.String("to", to[0].String()), zap.Reflect("response", response))
 			return errors.New(response.Body)
 		}
 	}
@@ -158,9 +159,25 @@ func (u *User) Logout() error {
 }
 
 var client *sendgrid.Client
+var log *zap.Logger
 
 func main() {
-	log.Logger = log.Hook(SeverityHook{})
+	var err error
+	config := &zap.Config{
+		Level:            zap.NewAtomicLevelAt(zapcore.InfoLevel),
+		Encoding:         "json",
+		EncoderConfig:    stackdriver.EncoderConfig,
+		OutputPaths:      []string{"stdout"},
+		ErrorOutputPaths: []string{"stderr"},
+	}
+
+	if log, err = config.Build(zap.WrapCore(func(core zapcore.Core) zapcore.Core {
+		return &stackdriver.Core{
+			Core: core,
+		}
+	})); err != nil {
+		panic(err)
+	}
 
 	be := &Backend{}
 
@@ -175,9 +192,9 @@ func main() {
 	s.MaxRecipients = 50
 	s.AuthDisabled = true
 
-	log.Info().Str("addr", s.Addr).Msg("Starting server")
+	log.Info("Starting server", zap.String("addr", s.Addr))
 	if err := s.ListenAndServe(); err != nil {
-		log.Fatal().Msg(err.Error())
+		log.Fatal("", zap.Error(err))
 	}
 }
 
@@ -190,12 +207,4 @@ func stripSpaces(str string) string {
 		// else keep it in the string
 		return r
 	}, str)
-}
-
-type SeverityHook struct{}
-
-func (h SeverityHook) Run(e *zerolog.Event, level zerolog.Level, msg string) {
-	if level != zerolog.NoLevel {
-		e.Str("severity", level.String())
-	}
 }
